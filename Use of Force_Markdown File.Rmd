@@ -1,0 +1,351 @@
+---
+title: "Police Use of Force"
+author: "John Aldecoa"
+date: "6/22/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+For this project, I wanted to map the number of police use of force cases across county jurisdictions for the state of California. I will be using data obtained from the California Department of Justice's (DOJ) Use of Force dataset, obtained from https://openjustice.doj.ca.gov/data. The California DOJ provides open access data on the criminal justice system. 
+
+The Use of Force dataset incluces data from 2016-2018 of incidents that resulted in serious bodily injury or death or involved the discharge of a firearm, as reported by Law Enforcement Agencies and other entities throughout the state that employ peace officers.
+
+## Load libraries
+
+```{r}
+library(readr)
+library(ggplot2)
+library(ggmap)
+library(maps)
+library(mapdata)
+library(tidyverse)
+library(lubridate)
+library(viridis)
+library(flexdashboard)
+library(plotly)
+library(knitr)
+library(hms)
+```
+
+
+## Import and Cleanup Data
+I began by importing the data from the California DOJ website.
+
+```{r}
+library(readr)
+Incident_2018 <- read_csv(url("https://data-openjustice.doj.ca.gov/sites/default/files/dataset/2019-07/URSUS_Incident_2018.csv"))
+Incident_2017 <- read_csv(url("https://data-openjustice.doj.ca.gov/sites/default/files/dataset/2018-08/URSUS_Incident_2017.csv"))
+Incident_2016 <- read_csv(url("https://data-openjustice.doj.ca.gov/sites/default/files/dataset/2018-08/URSUS_Incident_2016.csv"))
+```
+
+The data consists of several flat files including information on each individual incident, each person - officer and civilian - invovled in the incident and each agency involved in the incident. These flat files are related along the key, **Incident_ID**, which is the identifier used to represent each unique incident or case, or the key, **ORI**, which is the number of the reporting agency. 
+
+``` {r}
+view(Incident_2016)
+view(Incident_2017)
+view(Incident_2018)
+```
+
+To bind the data, I used the row_bind function in the dplyr package. To merge the 2016, 2017 and 2018 incident datasets, I needed to first ensure that all the variable names and variable types were identical. This required cleaning up the 2016 dataset by renaming variables and converting the **INCIDENT_TIME_STR** variable to a time variable, to match with the 2017 and 2018 datasets. 
+
+```{r}
+Incident_2016 <- rename(Incident_2016,
+                        "INCIDENT_ID" = "Incident_ID",
+                        "ORI" = "ORI",
+                        "INCIDENT_DATE_STR" = "Incident_Date_Str",
+                        "INCIDENT_TIME_STR" = "Incident_Time_Str",
+                        "CITY" = "City",
+                        "COUNTY" = "County",
+                        "STATE" = "State",
+                        "ZIP CODE" = "Zip_Code",
+                        "MULTIPLE_LOCATIONS" = "Multiple_Locations",
+                        "ON_K12_CAMPUS" = "On_K12_Campus",
+                        "ARREST_MADE" = "Arrest_Made",
+                        "CRIME_REPORT_FILED" = "Crime_Report_Filed",
+                        "CONTACT_REASON" = "Contact_Reason",
+                        "IN_CUSTODY_REASON" = "In_Custody_Reason",
+                        "NUM_INVOLVED_CIVILIANS" = "Num_Involved_Civilians",
+                        "NUM_INVOLVED_OFFICERS" = "Num_Involved_Officers")
+
+Incident_2016 <- Incident_2016 %>%
+        mutate(INCIDENT_TIME_STR = as.hms(Incident_2016$INCIDENT_TIME_STR))
+```
+
+After cleaning up the 2016 dataset, I used the **row_bind** function to combine the datasets into a single tibble.
+
+```{r}
+Incident_data <- Incident_2018 %>%
+        bind_rows(Incident_2017)
+
+Incident_data <- Incident_data %>%
+        bind_rows(Incident_2016)
+```
+
+Now that the incident data is combined, let's explore!
+
+## Exploratory data analysis
+
+The first thing that I'm interested in is the total number of police use of force cases that resulted in serious bodily injury or death. 
+
+To begin, I need to designate the year in the **mmddyyy** values of the **INCIDENT_DATE_STR** variable.
+
+```{r}
+Incident_data <- Incident_data %>%
+        mutate(INCIDENT_DATE_STR = mdy(INCIDENT_DATE_STR))
+
+Incident_data <- Incident_data %>%
+        tibble(date = INCIDENT_DATE_STR,
+               year = year(INCIDENT_DATE_STR),
+               month = month(INCIDENT_DATE_STR),
+               day = day(INCIDENT_DATE_STR))
+```
+
+Since every case represents a single incident, I can use the following function.
+
+```{r}
+Incident_data %>%
+        count(year)
+
+ggplot(Incident_data) +
+        geom_bar(mapping = aes(x = year), fill = "blue")
+```
+
+The data shows that there has been a gradual decline in the number of police use of force incidents that result in serious bodily injury or death across the state of California. 
+
+The California DOJ also notes that 2016 was the first year that agencies reported these data, and since not every law enforcement agency had the capacity to report these data, the 2016 dataset was likely less complete than latter years. This suggests that the incident count for 2016 was likely higher than what we see in the above graph, which suggests that these specific use of force incidents in California have seen an even greater reduction over the last few years. 
+
+But while these incidents have decreased statewide, this may not be true across all counties in the state. That is, this statewide decline in police use of force cases that result in serious bodily injury or death may mask increases in incidents in specific jurisdictions. 
+
+Given this, I segmented the data by individual counties to explore whether specific counties show reverse trends.
+
+To do this, I first cleaned up the values in the **COUNTY** variable by using the **recode** function.
+
+```{r}
+Incident_data <- Incident_data %>%
+    mutate(COUNTY = recode(COUNTY, 
+                           "ALAMEDA" = "Alameda County",
+                           "BUTTE" = "Butte County",
+                           "CALAVERAS" = "Calaveras County",
+                           "CONTRA COSTA" = "Contra Costa County",
+                           "DEL NORTE" = "Del Norte County",
+                           "EL DORADO" = "El Dorado County",
+                           "FRESNO" = "Fresno County",
+                           "GLENN" = "Glenn County",
+                           "HUMBOLDT" = "Humboldt County",
+                           "IMPERIAL" = "Imperial County",
+                           "KERN" = "Kern County",
+                           "KINGS" = "Kings County",
+                           "LAKE" = "Lake County",
+                           "LASSEN" = "Lassen County",
+                           "LOS ANGELES" = "Los Angeles County",
+                           "MADERA" = "Madera County",
+                           "MARIN" = "Marin County",
+                           "MARIPOSA" = "Mariposa County",
+                           "MENDOCINO" = "Mendocino County",
+                           "MERCED" = "Merced County",
+                           "MONTEREY" = "Monterey County",
+                           "NAPA" = "Napa County",
+                           "NEVADA" = "Nevada County",
+                           "ORANGE" = "Orange County",
+                           "PLACER" = "Placer County",
+                           "PLUMAS" = "Plumas County",
+                           "RIVERSIDE" = "Riverside County",
+                           "SACRAMENTO" = "Sacramento County",
+                           "SAN BERNARDINO" = "San Bernardino County",
+                           "SAN DIEGO" = "San Diego County",
+                           "SAN FRANCISCO" = "San Francisco County",
+                           "SAN JOAQUIN" = "San Joaquin County",
+                           "SAN LUIS OBISPO" = "San Luis Obispo County",
+                           "SAN MATEO" = "San Mateo County",
+                           "SANTA BARBARA" = "Santa Barbara County",
+                           "SANTA CLARA" = "Santa Clara County",
+                           "SANTA CRUZ" = "Santa Cruz County",
+                           "SHASTA" = "Shasta County",
+                           "SISKIYOU" = "Siskiyou County",
+                           "SOLANO" = "Solano County",
+                           "SONOMA" = "Sonoma County",
+                           "STANISLAUS" = "Stanislaus County",
+                           "SUTTER" = "Sutter County",
+                           "TEHAMA" = "Tehama County",
+                           "TRINITY" = "Trinity County",
+                           "TULARE" = "Tulare County",
+                           "TUOLUMNE" = "Tuolumne County",
+                           "VENTURA" = "Ventura County",
+                           "YOLO" = "Yolo County",
+                           "YUBA" = "Yuba County"))
+```
+
+I then summarized the data with a table and graph.
+
+```{r}
+Incident_data %>%
+        group_by(year, COUNTY) %>%
+        summarize(n = n()) %>%
+        spread(year, n) %>%
+        kable()
+
+ggplot(Incident_data) +
+        geom_bar(mapping = aes(x = year)) +
+        facet_wrap(~ COUNTY)
+```
+
+From a visual observation, it seems as if the declining trend in use of force incidents that result in serious bodily injury or death has decreased in the majority of counties in California. However, there are 58 counties in California, which makes the county breakdown a bit difficult to see. To make it easier, I'll focus on only the top 15 counties in the state. There are several counties with less than a handful of incidents, and the top 15 counties make up about 85 percent of all incidents in the state. Therefore, trends in these jurisdictions will have the greatest impact on state-wide trends.  
+
+```{r}
+county_sort <- Incident_data %>%
+        count(COUNTY, sort = TRUE) %>%
+        head(15)
+
+county_sort <- Incident_data %>%
+        filter(COUNTY %in% county_sort$COUNTY)
+
+ggplot(county_sort) +
+        geom_bar(mapping = aes(x = year)) +
+        facet_wrap(~ COUNTY)
+```
+
+In the majority of the top 15 counties in California, the declining trend in police use of force incidents that result in serious bodily injury or death holds. While some counties, such as Alameda County and San Diego County, showed a slight uptick from 2016 to 2017, they each showed demonstrable declining trends from 2017 to 2018. Other counties, such as Orange County, Riverside County and San Bernardino County, show a slight uptick in incidents from 2017 to 2018, but overall they remain quite steady across all three years.
+
+## Mapping Use of Force Cases in California
+Let's go ahead and visually represent these use of force cases on a map of California. 
+
+To begin, let's use **map_data** to subset California counties.
+
+```{r}
+counties <- map_data("county")
+
+ca_counties <- counties %>%
+        filter(region == "california")
+```
+
+Next, I want to make a vector map of California counties. This vector map will be used to plot the county data into their respective counties.
+
+```{r}
+ca_base <- ggplot(data = ca_counties, mapping = aes(x = long, y = lat, group = group)) +
+        coord_quickmap() +
+        geom_polygon(color = "black", fill = "grey")
+
+ca_base
+```
+
+I'm not a fan of the way this looks. So I'll use **theme_void()** to remove the access grids and grey background.
+
+```{r}
+ca_base <- ca_base + theme_void() +
+        geom_polygon(data = ca_counties, fill = NA, color = "white") +
+        geom_polygon(color = "white", fill = NA)
+
+ca_base
+```
+
+Before I join the **Incident_data** with the **ca_base**, I want to (1) create a tibble with the county values for all California counties, (2) recode the county names to match those in the **ca_base** data and (3) ensure the column names are lowercase.
+
+```{r}
+forcebycounty <- Incident_data %>%
+        count(COUNTY)
+
+forcebycounty <- forcebycounty %>%
+    mutate(COUNTY = recode(COUNTY, 
+                           "Alameda County" = "alameda",
+                           "Butte County" = "butte",
+                           "Calaveras County" = "calaveras",
+                           "Contra Costa County" = "contra costa",
+                           "Del Norte County" = "del norte",
+                           "El Dorado County" = "el dorado",
+                           "Fresno County" = "fresno",
+                           "Glenn County" = "glenn",
+                           "Humboldt County" = "humboldt",
+                           "Imperial County" = "imperial",
+                           "Kern County" = "kern",
+                           "Kings County" = "kings",
+                           "Lake County" = "lake",
+                           "Lassen County" = "lassen",
+                           "Los Angeles County" = "los angeles",
+                           "Madera County" = "madera",
+                           "Marin County" = "marin",
+                           "Mariposa County" = "mariposa",
+                           "Mendocino County" = "mendocino",
+                           "Merced County" = "merced",
+                           "Monterey County" = "monterey",
+                           "Napa County" = "napa",
+                           "Nevada County" = "nevada",
+                           "Orange County" = "orange",
+                           "Placer County" = "placer",
+                           "Plumas County" = "plumas",
+                           "Riverside County" = "riverside",
+                           "Sacramento County" = "sacramento",
+                           "San Bernardino County" = "san bernardino",
+                           "San Diego County" = "san diego",
+                           "San Francisco County" = "san francisco",
+                           "San Joaquin County" = "san joaquin",
+                           "San Luis Obispo County" = "san luis obispo",
+                           "San Mateo County" = "san mateo",
+                           "Santa Barbara County" = "santa barbara",
+                           "Santa Clara County" = "santa clara",
+                           "Santa Cruz County" = "santa cruz",
+                           "Shasta County" = "shasta",
+                           "Siskiyou County" = "siskiyou",
+                           "Solano County" = "solano",
+                           "Sonoma County" = "sonoma",
+                           "Stanislaus County" = "stanislaus",
+                           "Sutter County" = "sutter",
+                           "Tehama County" = "tehama",
+                           "Trinity County" = "trinity",
+                           "Tulare County" = "tulare",
+                           "Tuolumne County" = "tuolumne",
+                           "Ventura County" = "ventura",
+                           "Yolo County" = "yolo",
+                           "Yuba County" = "yuba"))
+forcebycounty <- mutate_each(forcebycounty, funs(tolower))
+
+forcebycounty
+```
+
+Now, it's time to join the two datasets using dplyr's **left_join** function.
+
+```{r}
+caforce <- left_join(ca_counties, forcebycounty, by = c("subregion" = "COUNTY"))
+
+caforce <- tibble(caforce)
+caforce <- caforce %>%
+        mutate(n = as.numeric(n))
+caforce
+```
+
+Map the data
+
+```{r}
+hotforce <- ca_base +
+        geom_polygon(data = caforce, aes(fill = n), color = "white") + 
+        geom_polygon(color = "black", fill = NA) +
+        theme_void()
+hotforce
+```
+
+We may want to adjust the color settings to make the graphic more accessible for individuals who suffer from color blindness. We can do this with the **viridis** package.
+
+```{r}
+hotforce <- hotforce +
+        scale_fill_viridis(breaks = c(100, 200, 300, 400, 500))
+
+hotforce
+```
+
+We can also make this graph interactive using the **plotly** package.
+
+```{r}
+ggplotly(hotforce)
+```
+
+
+
+
+
+
